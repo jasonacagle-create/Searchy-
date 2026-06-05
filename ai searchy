@@ -60,6 +60,8 @@ button{background:var(--teal);color:#fff;border:none;cursor:pointer;font-weight:
 button.secondary{background:#6b7a8d}
 button.danger{background:#a23b30}
 button.mode-toggle{background:#374151}
+button.speak-btn{background:#5a3e8a}
+button.speak-btn.speaking{background:#a23b30}
 button:disabled{opacity:.6;cursor:not-allowed}
 .status{margin-top:12px;color:#d6e2ed;font-size:.92rem}
 .stats{background:var(--soft);color:var(--muted);padding:10px 20px;border-bottom:1px solid var(--border);font-size:.92rem}
@@ -95,6 +97,7 @@ body.dark .error-box{background:#3b1d1a;color:#fecaca;border-color:#7f1d1d}
       <option value="exact">Exact Phrase</option>
     </select>
     <button id="searchBtn">Search</button>
+    <button id="speakBtn" class="speak-btn">Speak Results</button>
     <button id="themeBtn" class="mode-toggle">Dark Mode</button>
   </div>
 
@@ -435,7 +438,85 @@ async function processImages() {
   }
 }
 
+const speakBtn = document.getElementById("speakBtn");
+let isSpeaking = false;
+
+function updateSpeakBtn() {
+  speakBtn.textContent = isSpeaking ? "Stop Speaking" : "Speak Results";
+  speakBtn.classList.toggle("speaking", isSpeaking);
+}
+
+function stopSpeaking() {
+  window.speechSynthesis.cancel();
+  isSpeaking = false;
+  updateSpeakBtn();
+}
+
+function speakResults() {
+  if (!("speechSynthesis" in window)) {
+    alert("Text-to-speech is not supported in this browser.");
+    return;
+  }
+
+  if (isSpeaking) {
+    stopSpeaking();
+    return;
+  }
+
+  const query = searchInput.value.trim();
+  const mode = modeSelect.value;
+  const matchesFound = query
+    ? textbookData.filter(page => matches(page.content || "", query, mode))
+    : [];
+
+  if (!query) {
+    const utter = new SpeechSynthesisUtterance("Please enter a search term first.");
+    window.speechSynthesis.speak(utter);
+    return;
+  }
+
+  if (!matchesFound.length) {
+    const utter = new SpeechSynthesisUtterance(`No results found for ${query}.`);
+    window.speechSynthesis.speak(utter);
+    return;
+  }
+
+  const lines = [];
+  lines.push(`Found ${matchesFound.length} result${matchesFound.length === 1 ? "" : "s"} for ${query}.`);
+
+  matchesFound.forEach((page, i) => {
+    const chap = page.chapter != null ? `Chapter ${page.chapter}` : "";
+    const pg = page.page != null ? `Page ${page.page}` : "";
+    const location = [chap, pg].filter(Boolean).join(", ");
+    const snippet = getSnippet(page.content || "", query, mode)
+      .replace(/\.\.\./g, " ")
+      .replace(/<[^>]+>/g, "");
+    lines.push(`Result ${i + 1}. ${location}. ${page.title ? page.title + ". " : ""}${snippet}`);
+  });
+
+  const fullText = lines.join(" \n");
+  const utterance = new SpeechSynthesisUtterance(fullText);
+  utterance.rate = 0.95;
+  utterance.pitch = 1;
+
+  utterance.onstart = () => {
+    isSpeaking = true;
+    updateSpeakBtn();
+  };
+  utterance.onend = () => {
+    isSpeaking = false;
+    updateSpeakBtn();
+  };
+  utterance.onerror = () => {
+    isSpeaking = false;
+    updateSpeakBtn();
+  };
+
+  window.speechSynthesis.speak(utterance);
+}
+
 function clearSearch() {
+  stopSpeaking();
   searchInput.value = "";
   renderWelcome();
   updateStats();
@@ -454,12 +535,13 @@ function resetAll() {
 }
 
 document.getElementById("searchBtn").addEventListener("click", searchData);
+document.getElementById("speakBtn").addEventListener("click", speakResults);
 document.getElementById("scanBtn").addEventListener("click", processImages);
 document.getElementById("clearBtn").addEventListener("click", clearSearch);
 document.getElementById("resetBtn").addEventListener("click", resetAll);
 document.getElementById("themeBtn").addEventListener("click", toggleTheme);
-searchInput.addEventListener("input", searchData);
-modeSelect.addEventListener("change", searchData);
+searchInput.addEventListener("input", () => { stopSpeaking(); searchData(); });
+modeSelect.addEventListener("change", () => { stopSpeaking(); searchData(); });
 
 applyTheme();
 sortPages();
