@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy to <name>.json. Only .json files are loaded, so this template is inert.",
+
+  "referenceSource": "human",
+  "_referenceSource": "MUST be \"human\". A reference written by a model makes the bake-off rank models by similarity to that model, and the table looks completely normal. Anything else is refused — including an undeclared source, since silence is not a claim of human authorship.",
+
+  "text": "The full body text of the page, transcribed BY HAND, verbatim. Keep case and punctuation: OCR is scored raw, because both are part of what was on the page.",
+
+  "fields": { "chapter": 3, "page": 42, "title": "Cell Structure" },
+  "_fields": "Scored exact-match. Use null where the page genuinely does not show one — do not infer.",
+
+  "imageDataUrl": "data:image/jpeg;base64,...",
+  "_imageDataUrl": "The page photo, compressed. ai-searchy.html already compresses to max-width 1200 at q0.72 before upload; the same output works here."
+}
