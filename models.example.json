@@ -1,0 +1,9 @@
+{
+  "_note_control": "Keep at least one NON-open-weight model enabled. A bake-off among open-weight models that never checks a strong closed one cannot say what the choice COSTS — it can only rank the candidates against each other. loadRegistry() warns loudly when this is violated; it does not refuse, because an open-only comparison is a legitimate thing to run deliberately.",
+  "models": [
+    { "id": "qwen/qwen3-32b",                  "label": "Qwen3-32B",   "weights": "open",   "licence": "Apache-2.0", "enabled": true },
+    { "id": "deepseek/deepseek-chat",          "label": "DeepSeek",    "weights": "open",   "licence": "MIT",        "enabled": true },
+    { "id": "meta-llama/llama-3.3-70b-instruct","label": "Llama 3.3",  "weights": "open",   "licence": "Llama-3.3",  "enabled": false },
+    { "id": "openai/gpt-4.1-mini",             "label": "GPT-4.1-mini","weights": "closed", "licence": "proprietary","enabled": true }
+  ]
+}

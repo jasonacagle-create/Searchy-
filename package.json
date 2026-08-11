@@ -1,0 +1,14 @@
+{
+  "name": "grading-rig",
+  "version": "0.1.0",
+  "description": "Blind-graded LLM bake-off: can a model grade a trade it has not seen the outcome of, and how much of the grade is hindsight?",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "test": "node test/rig.test.js"
+  },
+  "dependencies": {},
+  "license": "UNLICENSED",
+  "private": true
+}
