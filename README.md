@@ -108,6 +108,23 @@ brings its own scorer in `src/scorer.js` for the half that does not. Run it thro
 CER run. That reference would be a machine's opinion — and this harness already refuses
 machine-written references for exactly that reason.
 
+`gradeTrades` returns **`{ ranked, raw, winner, methodology }`**. `winner` is `null` with a
+named reason whenever the sample cannot support one — and the tie band is **one standard
+error of rho, `1/sqrt(n-1)`**: the sample's own noise rather than a margin somebody chose,
+which also tightens automatically as the corpus grows.
+
+**`blinding` accepts a string, and defaults to both ends anyway.** A single level is a
+legitimate run and stays available — but the premium is `full − narrative`, so defaulting
+to one end would make the headline number structurally uncomputable while every "is the
+level passed?" check still passed. That is the exact defect this package was extracted to
+fix, at the API surface. A one-level run says in `methodology.note` what it cannot answer.
+
+**`coronerField`** compares the grades against a deterministic verdict. An attribution
+(`thesis-wrong`, `market-beta`, `earned-alpha`) is a CLASS, not a letter, and no arithmetic
+turns one into the other — so without `coronerOrder` you get the crosstab (mean grade per
+class, with n) and `rho: null`. Declare an ordering and you get a correlation, with the
+output stating that the ordering is **your** claim, not something derived here.
+
 ```js
 const { gradeTrades, loadRegistry } = require('./src/index.js');
 const rtdb = require('./adapters/rtdb.js');
@@ -121,7 +138,7 @@ const { report } = await gradeTrades(trades, {
   visibleKeys: ['ticker','side','tier','entry','stopLoss','target','atrPct','thesis'],
   outcomeKeys: ['exitPrice','exitReason','profit','percentGain','durationMinutes','exitTime'],
   returnOf   : t => t.percentGain * 100,   // the LABEL. Never in visibleKeys.
-  models, levels: ['narrative','full'],    // both ends, or there is no premium
+  models, blinding: ['narrative','full'],  // the default; a string runs one level
   apiKey     : process.env.OPENROUTER_KEY
 });
 ```
@@ -146,7 +163,7 @@ and *"there are no closed trades"* are opposite facts.
   cannot exercise, and an untested adapter that *looks* finished is worse than none.
 
 ```
-node test/rig.test.js     # 16 assertions, 9 mutations, no network
+node test/rig.test.js     # 23 assertions, 15 mutations, no network
 ```
 
 One of those mutations is worth knowing about: disabling the deep scrub initially PASSED,

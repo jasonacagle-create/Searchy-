@@ -188,10 +188,10 @@ t('a model without weights or licence is refused; a missing control only warns',
     }));
 
     const out = await RIG.gradeTrades(trades, Object.assign({}, CONFIG, {
-      models, levels: ['narrative', 'full'], throttleMs: 0, caseId: (x) => x.id
+      models, blinding: ['narrative', 'full'], throttleMs: 0, caseId: (x) => x.id
     }), { call });
 
-    const r = out.report['fake/one'];
+    const r = out.raw.find(x => x.model === 'fake/one');
     assert.ok(r.byLevel.narrative && r.byLevel.full, 'both levels must be scored separately');
     assert.strictEqual(r.tally.narrative.ok, 24);
     assert.strictEqual(r.tally.full.ok, 24);
@@ -247,6 +247,114 @@ t('a model without weights or licence is refused; a missing control only warns',
     // would otherwise produce a confident, fully unblinded run.
     assert.throws(() => TASK.buildMessages({ trade: TRADE, level: 'full', blind: { visibleKeys: ['ticker'] } }),
       /outcomeKeys/);
+  });
+
+  // ── 7 · THE SIGNATURE'S SHARP EDGES ────────────────────────────────────────
+  const fakeModels = [{ id: 'm/a', label: 'A', weights: 'open', licence: 'MIT' },
+                      { id: 'm/b', label: 'B', weights: 'closed', licence: 'prop' }];
+  const corpus = Array.from({ length: 30 }, (_, i) => Object.assign({}, TRADE, {
+    id: 'C' + i, ticker: 'ZZ' + i, entry: 100 + i,
+    percentGain: (i % 2 ? 1 : -1) * (0.02 + i / 200),
+    coronerVerdict: i % 3 === 0 ? 'thesis-wrong' : (i % 3 === 1 ? 'market-beta' : 'earned-alpha')
+  }));
+  const base = Object.assign({}, CONFIG, { models: fakeModels, throttleMs: 0, caseId: x => x.id });
+  // A grader that genuinely ranks: better entries (lower entry price here) get better grades.
+  const skilful = async ({ messages }) => {
+    const shown = JSON.parse(messages[1].content.slice(messages[1].content.indexOf('{')));
+    const g = shown.percentGain != null ? (shown.percentGain > 0 ? 'A' : 'F')
+                                        : 'ABCDF'[Math.min(4, Math.floor((shown.entry - 100) / 6))];
+    return { ok: true, text: JSON.stringify({ grade: g }) };
+  };
+
+  await T('a single blinding level runs, and SAYS the premium is uncomputable', async () => {
+    const out = await RIG.gradeTrades(corpus, Object.assign({}, base, { blinding: 'narrative' }), { call: skilful });
+    assert.deepStrictEqual(out.levels, ['narrative'], 'a string blinding must be accepted');
+    assert.strictEqual(out.methodology.premiumComputable, false);
+    assert.match(out.methodology.note, /needs both narrative and full/,
+      'a one-level run must state what it cannot answer, not stay quiet about it');
+    assert.strictEqual(out.raw[0].premium.premium, null, 'and the premium must be null, never 0');
+  });
+
+  await T('the DEFAULT grades both ends, so the premium exists without being asked for', async () => {
+    const out = await RIG.gradeTrades(corpus.slice(0, 6), base, { call: skilful });
+    assert.deepStrictEqual(out.levels, ['narrative', 'full'],
+      'defaulting to one level would reproduce the exact defect this package was extracted to fix');
+    assert.strictEqual(out.methodology.premiumComputable, true);
+  });
+
+  await T('refuses to crown a winner the sample cannot support', async () => {
+    // A THIN corpus with REAL grade spread. The first version of this used six trades whose
+    // entries were six dollars apart, so every grade came out 'A' — it hit no_rankable_model
+    // and never reached the too_thin branch at all, and a mutation removing that branch
+    // passed clean. A test has to reach the code it claims to guard.
+    const thinSpread = Array.from({ length: 10 }, (_, i) => Object.assign({}, TRADE, {
+      id: 'S' + i, ticker: 'ZZ' + i, entry: 100 + i * 6, percentGain: (i % 2 ? 1 : -1) * (0.03 + i / 100)
+    }));
+    const thin = await RIG.gradeTrades(thinSpread, base, { call: skilful });
+    assert.strictEqual(thin.winner.model, null);
+    assert.strictEqual(thin.winner.reason, 'too_thin', 'ten rows with real spread must trip too_thin, not no_spread');
+    assert.ok(thin.raw[0].byLevel.narrative.rho != null, 'and the rho must actually be computable, or the branch is untested');
+
+    // Two models given the SAME grader cannot be separated — that must read as a tie,
+    // never as a hairline win for whichever floated up in the sort.
+    const same = await RIG.gradeTrades(corpus, base, { call: skilful });
+    assert.strictEqual(same.winner.model, null, 'identical graders must not produce a winner');
+    assert.strictEqual(same.winner.reason, 'tie');
+    assert.match(same.winner.detail, /noise/);
+  });
+
+  await T('the tie band is the sample noise and tightens as n grows', () => {
+    assert.ok(RIG.tieBand(101) < RIG.tieBand(26), 'a bigger corpus must separate models a fixed margin could not');
+    assert.strictEqual(RIG.tieBand(1), Infinity);
+  });
+
+  await T('coronerField reports the crosstab and REFUSES a single number without an ordering', async () => {
+    const noOrder = await RIG.gradeTrades(corpus, Object.assign({}, base, { coronerField: 'coronerVerdict' }), { call: skilful });
+    const c = noOrder.raw[0].coroner;
+    assert.ok(c.n > 0 && c.byClass['thesis-wrong'], 'per-class means are the honest form');
+    assert.strictEqual(c.rho, null, 'no ordering declared means no agreement number');
+    assert.match(c.reason, /no_ordering_declared/);
+
+    const ordered = await RIG.gradeTrades(corpus, Object.assign({}, base, {
+      coronerField: 'coronerVerdict', coronerOrder: ['earned-alpha', 'market-beta', 'thesis-wrong']
+    }), { call: skilful });
+    const o = ordered.raw[0].coroner;
+    assert.ok(typeof o.rho === 'number' || o.rho === null);
+    assert.match(o.assumes, /declared by you, not derived here/,
+      'an ordering is a claim the caller made and the output must say so');
+  });
+
+  await T('ranks on the BLIND level — a model that only grades well when shown the answer loses', async () => {
+    // m/a has judgement: its blind grades track the entry quality.
+    // m/b has none: blind it grades at random, sighted it reads percentGain perfectly.
+    // Ranked on `full`, m/b wins outright. Ranked on `narrative` — which is the product —
+    // m/a must win. Rank on the sighted number and you reward exactly the behaviour the
+    // blind exists to detect.
+    const call = async ({ model, messages }) => {
+      const shown = JSON.parse(messages[1].content.slice(messages[1].content.indexOf('{')));
+      const sighted = shown.percentGain != null;
+      const i = parseInt(String(shown.ticker).slice(2), 10);
+      let g;
+      if (model === 'm/a') g = 'ABCDF'[Math.min(4, Math.floor(i / 6))];   // tracks entry quality, blind or not
+      else g = sighted ? (shown.percentGain > 0 ? 'A' : 'F')              // only useful once shown the answer
+                       : 'ABCDF'[(i * 7) % 5];                            // blind: spread, but uncorrelated
+      return { ok: true, text: JSON.stringify({ grade: g }) };
+    };
+    // percentGain MUST change sign across the corpus, or the sighted grader emits one
+    // letter, its rho is null, and the premium it is supposed to demonstrate cannot exist.
+    // The first version of this fixture was positive throughout and failed for that reason.
+    const wide = Array.from({ length: 30 }, (_, i) => Object.assign({}, TRADE, {
+      id: 'W' + i, ticker: 'ZZ' + i, entry: 100 + i, percentGain: (14.5 - i) / 100
+    }));
+    const out = await RIG.gradeTrades(wide, base, { call });
+    assert.strictEqual(out.methodology.primaryLevel, 'narrative');
+
+    const a = out.raw.find(r => r.model === 'm/a'), b = out.raw.find(r => r.model === 'm/b');
+    assert.ok(Math.abs(a.byLevel.narrative.rho) > Math.abs(b.byLevel.narrative.rho),
+      'the fixture must actually separate them blind, or this proves nothing');
+    assert.ok(b.premium.premium > a.premium.premium,
+      'the hindsight-driven model must show the larger premium — that is what the premium is for');
+    if (out.winner.model) assert.strictEqual(out.winner.model, 'm/a', 'the blind winner must win');
   });
 
   console.log(`\n${n} assertions passed — the blind is the experiment\n`);
