@@ -357,5 +357,85 @@ t('a model without weights or licence is refused; a missing control only warns',
     if (out.winner.model) assert.strictEqual(out.winner.model, 'm/a', 'the blind winner must win');
   });
 
+  // ── 8 · THE CONSUMER ADAPTER, AND THE LEAK IT IS SHAPED TO AVOID ───────────
+  await T('a snake_case rename cannot smuggle an outcome past the blind', () => {
+    // The obvious adapter maps exitPrice -> exit_price on the way in. If a rename moved a
+    // field out of the outcome set, every consumer could defeat the blind by accident.
+    const renamed = { symbol: 'ZZ', entry_price: 100, exit_price: 118, quantity: 30 };
+    const cfg = { visibleKeys: ['symbol', 'entry_price', 'quantity'],
+                  outcomeKeys: ['exitPrice', 'profit'] };          // declared camelCase
+    const c = RIG.blindCase(renamed, 'narrative', cfg).case;
+    assert.ok(!('exit_price' in c), 'exit_price must be caught by an exitPrice declaration');
+    assert.strictEqual(c.entry_price, 100, 'and the entry-time fields must survive');
+  });
+
+  await T('entry + exit + quantity together ARE the P&L, and narrative shows none of it', () => {
+    const EX = require('../examples/cell-network.js');
+    const raw = { ticker: 'ZZ', side: 'long', tier: 'swing', entry: 100, stopLoss: 92,
+                  takeProfit: 120, atrPct: 2.4, positionSize: 30, why: 'basing',
+                  exitPrice: 118, exitReason: 'target', profit: 540, percentGain: 0.18,
+                  durationMinutes: 3840, exitTime: '2026-08-04T14:00:00Z', openTs: 1,
+                  // the two nested blocks, each carrying a smuggled outcome — which is how
+                  // this actually happens: nobody adds `profit` to the allowlist, they add
+                  // a field to a feature vector that already had one.
+                  feat: { atr_pct: 2.4, px_vs_ema8_pct: 1.1, exit_reason: 'target' },
+                  valueRead: { score: 71, flags: ['basing'], realizedPnl: 540, exitTime: 'x' } };
+    const norm = EX.normalise(raw);
+
+    // The adapter KEEPS the outcomes — stripping them at the adapter would leave
+    // mechanics/full with nothing to reveal, and the premium would read ~0 for a model
+    // that had simply never been shown anything.
+    assert.strictEqual(norm.exitPrice, 118, 'the record must carry the outcome for the levels to reveal');
+    assert.strictEqual(norm.profit, 540);
+
+    const nar = RIG.blindCase(norm, 'narrative', EX.BLIND).case;
+    for (const k of ['exitPrice', 'exitReason', 'profit', 'percentGain', 'durationMinutes', 'exitTime'])
+      assert.ok(!(k in nar), 'narrative leaked ' + k);
+    // and the three fields that reconstruct the P&L are not jointly present
+    assert.ok(!('exitPrice' in nar) && nar.entryPrice === 100 && nar.quantity === 30,
+      'entry and size are the DECISION and stay; the exit is what makes them an answer');
+
+    // risk_quality is one of the things the model is asked to score, so the stop must
+    // reach it — an adapter that drops stopLoss makes that column meaningless.
+    assert.strictEqual(nar.stopLoss, 92, 'without the stop the grader cannot assess risk management');
+    assert.strictEqual(nar.target, 120);
+
+    // The nested blocks arrive, minus everything smuggled in them. This is the only place
+    // outcomeKeys does real work — for top-level fields the allowlist alone decides.
+    assert.strictEqual(nar.feat.atr_pct, 2.4, 'the entry-time feature vector must survive');
+    assert.ok(!('exit_reason' in nar.feat), 'a snake_case outcome inside a feature vector must be scrubbed');
+    assert.strictEqual(nar.read.score, 71);
+    assert.ok(!/realizedPnl|540/.test(JSON.stringify(nar.read)), 'a P&L smuggled into the read must not survive');
+    assert.ok(!('exitTime' in nar.read), 'and a nested exitTime is a duration leak by subtraction');
+
+    const full = RIG.blindCase(norm, 'full', EX.BLIND).case;
+    for (const k of RIG.LEVELS.full) assert.ok(k in full, 'full must reveal ' + k);
+  });
+
+  await T('the two layers are DEFENCE IN DEPTH — measured, not assumed', () => {
+    // Mutation testing on the example adapter found that removing the inner allowlists, or
+    // dropping a name from outcomeKeys, changed nothing: the other layer caught it every
+    // time. That is the intended property and it is worth pinning, because "no mutation
+    // failed" otherwise reads as a weak test rather than as a working design.
+    const EX = require('../examples/cell-network.js');
+    const raw = { ticker: 'ZZ', entry: 100, positionSize: 30, stopLoss: 92, openTs: 1,
+                  feat: { atr_pct: 2.4, exit_reason: 'target' },
+                  valueRead: { score: 71, realizedPnl: 540 } };
+    const norm = EX.normalise(raw);
+    const seen = (cfg) => JSON.stringify(RIG.blindCase(norm, 'narrative', cfg).case.read || {});
+
+    const noNest = Object.assign({}, EX.BLIND); delete noNest.nestedKeys;
+    const noOut  = Object.assign({}, EX.BLIND, { outcomeKeys: ['profit'] });
+    const neither = Object.assign({}, noNest, { outcomeKeys: ['profit'] });
+
+    assert.ok(!/realizedPnl/.test(seen(EX.BLIND)), 'both layers');
+    assert.ok(!/realizedPnl/.test(seen(noNest)),   'the scrub alone must hold');
+    assert.ok(!/realizedPnl/.test(seen(noOut)),    'the inner allowlist alone must hold');
+    // …and with NEITHER it leaks, which is what proves those two are the things holding
+    // rather than something incidental about the fixture.
+    assert.ok(/realizedPnl/.test(seen(neither)),
+      'remove both and it must leak — otherwise the test is proving nothing about either layer');
+  });
+
   console.log(`\n${n} assertions passed — the blind is the experiment\n`);
 })().catch(e => { console.error('\nFAILED:', e && e.message); process.exit(1); });
