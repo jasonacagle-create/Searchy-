@@ -1,26 +1,71 @@
-# grading-rig
+# Searchy — an open bake-off platform
 
-**Can a language model grade a trade it has not seen the outcome of — and how much of the grade is hindsight?**
+A place to run the **same task across several open-weight models** and find out which one
+actually wins, on a task that has a **ground truth**.
 
-Zero runtime dependencies. Node ≥ 18. One export: `gradeTrades(trades, config)`.
+Deliberately separate from the trading engine. That repo carries heavy conventions —
+mutation tests, doctrine files, PR gates on anything user-facing — which are right for
+code that sets real stop levels and wrong for "try four models and see what happens."
+
+## Why OCR is the first tenant
+
+Because you know what the page says. Most model comparisons come down to which output
+someone preferred; this one is arithmetic, and a wrong answer is provably wrong. A harness
+calibrated on a task with real answers can later be trusted on tasks whose answers are
+softer.
+
+## What the harness refuses to do
+
+These are the whole point. A bake-off that always produces a ranking is worth less than
+one that says it cannot.
+
+| | |
+|---|---|
+| **Score a refusal as 100% error** | "I cannot read this" and a confident hallucination are different failures. Refusals are counted apart and never averaged into accuracy. |
+| **Report accuracy without coverage** | 2% error on the third of pages a model deigned to read has not beaten 6% on all of them. |
+| **Hide the normalisation** | The same pair scores **CER 0.4286 raw and 0.0000 loose**. That choice is declared per task and printed with every result. |
+| **Score against a machine-written reference** | It measures agreement with whichever model wrote the reference. Fixtures declare `referenceSource`, and anything but `"human"` — including *undeclared* — is refused, not warned about. |
+| **Crown a winner it cannot support** | Under 5 scored samples: `too_thin`. Within 1 point of CER: `tie`, decide on cost, latency or licence. |
+| **Drop the incumbent** | `openai/gpt-4.1-mini` (what the original page used) stays in the default line-up. A bake-off among open-weight models that never checks what it is replacing cannot tell you whether switching costs anything. |
+
+## Run it
+
+```bash
+node bakeoff/run.js --task ocr --dry          # validate fixtures, call nothing
+OPENROUTER_KEY=... node bakeoff/run.js --task ocr
+node bakeoff/bakeoff.test.js                  # 12 mutations, zero deps
+```
+
+Fixtures: `fixtures/ocr/*.json` — see `_TEMPLATE.json.example`.
+
+## Adding a task
+
+A task is a name and three functions, which is what makes this a platform rather than an
+OCR script:
+
+```js
+module.exports = { NAME, SYSTEM, NORMALISE, buildMessages, parse };
+```
+
+Drop it in `bakeoff/tasks/`, put fixtures in `fixtures/<name>/`, run with `--task <name>`.
+
+## `ai-searchy.html`
+
+The original page: photograph textbook pages, extract chapter/page/text, search locally.
+It calls `/.netlify/functions/extract-pages-batch`, **which is not in this repo** — it was
+deleted at `6512b7c`. The page cannot work as deployed until that endpoint is rebuilt, and
+rebuilding it is the natural payoff of the bake-off: whichever model wins goes behind it.
 
 ---
 
-## What this is
+## Second tenant: `trade-grading`
 
-A deterministic grader — a coroner, an attribution model, a rules engine — **measures** what happened. This asks for a **judgement** made from entry-time information only, then measures whether that judgement carries information the measurement does not.
+**Can a model grade a trade it has not seen the outcome of — and how much of the grade is
+hindsight?** The opposite case to OCR on purpose: there is no ground truth. Nobody can say
+what grade a trade *should* have got. What can be measured is whether the grades RANK the
+outcomes, and how much of that ranking survives once the outcome is hidden.
 
-The experiment has a real chance of coming back **no**, and either answer is worth having.
-
-**It never decides anything.** It produces grades and a scorecard. Nothing here opens a position, vetoes one, or feeds a scorer that does. If a grade ever earns a place in a decision, it earns that on a forward record, in a sandbox, like any other unproven signal.
-
----
-
-## The blind is the whole experiment
-
-Show a model the exit price and it rationalises backwards — A for the winners, D for the losers — and you have built an expensive P&L restater with opinions. Every model does this. It is not a capability problem, it is a leak.
-
-**Three levels make the leak a measured variable:**
+**Three blinding levels make the leak a measured variable:**
 
 | level | sees | asks |
 |---|---|---|
@@ -28,29 +73,44 @@ Show a model the exit price and it rationalises backwards — A for the winners,
 | `mechanics` | + exit price | can it subtract, then grade the result? |
 | `full` | + P&L and exit reason | does it just narrate? |
 
-A binary blind can only answer *do the grades predict?* Three levels also answer **how much of the grade is hindsight**, because the gap between `narrative` and `full` **is** the hindsight premium. A model whose blind grades predict as well as its sighted ones has judgement. One whose sighted grades are far better is restating the outcome — and that gap is now a number instead of a suspicion.
+The gap between `narrative` and `full` **is** the hindsight premium. A model whose blind
+grades predict as well as its sighted ones has judgement; one whose sighted grades are far
+better is restating the outcome — and that is now a number rather than a suspicion.
 
-`narrative` is the default. The other levels exist to be measured against, never to be used alone.
+### What it refuses to do
 
----
+| refuses | because |
+|---|---|
+| **Run without a declared outcome set** | `outcomeKeys` is required. Defaulting it to empty gives a green run, a full corpus of grades, and no blind at all — with nothing in the output saying so. |
+| **Use a denylist** | The blind is an ALLOWLIST. A denylist leaks every field added to your records later; the day someone stamps `realizedR` on a closed trade it forwards it and nothing looks wrong. |
+| **Treat duration as innocent** | A 12-minute hold on a swing setup is a stop-out. Duration is outcome data — and entry time and exit time shown *separately* leak it just as completely. |
+| **Report 0.0 for "cannot compute"** | `rho` is `null` with a named reason when the sample is thin or every grade is the same letter. 0.0 is a real value meaning *no correlation*, and the premium is a difference of two scores — an unknown masquerading as a zero propagates silently. |
+| **Coerce an off-schema grade** | `"B+"`, a hedge or a refusal is REFUSED, never mapped to F. Same discipline as counting an OCR refusal apart from a hallucination. |
+| **Ship one system prompt at every level** | A constant asserting "the outcome is withheld", sent at `full`, contradicts its own user message — on exactly the levels the premium is computed from. |
 
-## Three rules this package is built on
+### THE ONE PLACE IT DOES NOT FIT THIS HARNESS
 
-**1 · The blind is an ALLOWLIST, never a denylist.** A denylist silently leaks every field added to your records later — the day someone stamps `realizedR` onto a closed trade, a denylist forwards it and nothing looks wrong.
+`bakeoff/run.js` scores each case against `fixture.reference` and averages. This task
+cannot be scored that way, and the reason is structural rather than a missing feature:
 
-**2 · It refuses to run without a declared outcome set.** `config.outcomeKeys` is required. Defaulting it to empty would be the most dangerous line in the package: a green run, a full corpus of grades, and no blind at all — with nothing in the output saying so.
+```
+ocr             per case:    distance(hypothesis, reference)     -> mean CER
+trade-grading   per CORPUS:  spearman(grades, realised returns)  -> one rho
+```
 
-**3 · An unrankable state never shares a value with a rankable one.** `rho` is `null` with a named reason when the sample is thin or the grades have no spread — never `0.0`, which is a real value meaning *no correlation*. A model that graded everything B must be distinguishable from one whose grades genuinely carry no signal. That matters **more** with levels, not less: the premium is a difference of two scores, so an unknown masquerading as a zero propagates into it silently.
+A rank correlation is not an average of per-case scores and cannot be computed one case at
+a time. So `tasks/trade-grading.js` exports the four functions the harness needs to CALL a
+model — prompt, parse, refusal discipline, the half that genuinely generalises — and
+brings its own scorer in `src/scorer.js` for the half that does not. Run it through
+`src/index.js`'s `gradeTrades()`, not `bakeoff/run.js`.
 
-**Duration is outcome information**, and it is the one that looks innocent. A 12-minute hold on a swing setup is a stop-out. Put any duration field in `outcomeKeys` — and note that showing entry time and exit time *separately* leaks it just as completely, because their difference is the same number.
-
----
-
-## Usage
+**Faking it would have been easy and wrong:** give each case a "reference grade" and let
+CER run. That reference would be a machine's opinion — and this harness already refuses
+machine-written references for exactly that reason.
 
 ```js
-const { gradeTrades, loadRegistry } = require('grading-rig');
-const rtdb = require('grading-rig/adapters/rtdb.js');
+const { gradeTrades, loadRegistry } = require('./src/index.js');
+const rtdb = require('./adapters/rtdb.js');
 
 const trades = await rtdb.closedTrades({ dbUrl: process.env.DB_URL, path: 'paper_portfolio' });
 const { models, problems, warnings } = loadRegistry('./models.json');
@@ -58,63 +118,38 @@ if (problems.length) throw new Error(problems.join('\n'));
 warnings.forEach(w => console.warn('WARN: ' + w));
 
 const { report } = await gradeTrades(trades, {
-  visibleKeys: ['ticker','side','tier','entry','stopLoss','target','atrPct','thesis','conviction'],
+  visibleKeys: ['ticker','side','tier','entry','stopLoss','target','atrPct','thesis'],
   outcomeKeys: ['exitPrice','exitReason','profit','percentGain','durationMinutes','exitTime'],
-  nestedKeys : { feat: ['atr_pct','px_vs_ema8_pct'] },
-  returnOf   : t => t.percentGain * 100,      // the LABEL. Never in visibleKeys.
-  models,
-  levels     : ['narrative','full'],          // both ends, or there is no premium
-  apiKey     : process.env.OPENROUTER_KEY,
-  caseId     : t => t.ticker + '_' + t.openTs
+  returnOf   : t => t.percentGain * 100,   // the LABEL. Never in visibleKeys.
+  models, levels: ['narrative','full'],    // both ends, or there is no premium
+  apiKey     : process.env.OPENROUTER_KEY
 });
-
-for (const [id, r] of Object.entries(report)) {
-  console.log(id, r.byLevel.narrative.verdict, '· premium', r.premium.premium ?? r.premium.reason);
-}
 ```
 
-`returnOf` is deliberately separate from `visibleKeys`: it is the **label**, and it must reach the scorer without ever reaching the prompt.
+**Key your storage by `(model, level, caseId)`.** One trade graded at two levels is two
+observations; a shared key lets the last write win and the premium compares a grade
+against itself.
 
-### Storage is yours
+### Adapters
 
-`gradeTrades` returns records; it does not persist them. Pass `hooks.onRecord` to write each one and `hooks.has(model, level, caseId)` to skip work already done.
-
-**Key your storage by `(model, level, caseId)`.** One trade graded at two levels is **two observations** — a shared key lets the last write win, and the premium then compares a grade against itself.
-
----
-
-## Adapters
-
-An adapter is one function returning an array of plain trade objects. That is the entire contract:
+One function, returning an array of trade objects — that is the whole contract:
 
 ```js
 async function closedTrades(opts) -> Array<object>
 ```
 
-It must **throw** on a read failure rather than return `[]`. *"The store did not answer"* and *"there are no closed trades"* are opposite facts, and a rig handed `[]` reports a clean, successful run over a book it never saw.
+It must **throw** on a read failure rather than return `[]`. *"The store did not answer"*
+and *"there are no closed trades"* are opposite facts.
 
-- **`adapters/rtdb.js`** — Firebase Realtime Database. Written, tested against its own error paths, zero-dep (RTDB speaks plain REST).
-- **Firestore — not written.** It was in the original sketch and is deliberately absent: Firestore's REST surface needs an auth flow this package cannot exercise, and shipping an untested adapter that *looks* finished is worse than shipping none. The contract above is four lines; write it against your own project and you will know it works.
-
----
-
-## Reading the result
-
-- **`verdict: no_spread`** — every grade was the same letter. This is a **real finding**, not a failed run, and it is the likeliest first-run outcome.
-- **`verdict: too_thin`** — fewer than 20 graded rows with a usable return. A rho off a handful of rows is noise in a statistic's costume.
-- **`premium: null, reason: need_both_levels`** — one end is missing or unrankable. Not a premium of zero; the opposite finding.
-- **Bucket means are colour, never the ranking key.** Ranking on the A-bucket-minus-F-bucket average discards every trade in between and lets one outsized winner carry the leaderboard. Spearman uses every row and is not moved by a single whale.
-
----
-
-## Tests
+- **`adapters/rtdb.js`** — Firebase Realtime Database, zero-dep (RTDB speaks plain REST).
+- **Firestore — deliberately not written.** Its REST surface needs an auth flow this repo
+  cannot exercise, and an untested adapter that *looks* finished is worse than none.
 
 ```
-npm test
+node test/rig.test.js     # 16 assertions, 9 mutations, no network
 ```
 
-Runs against an injected model caller — no network, no keys, no market. A rig whose tests need a live gateway gets run once and never again.
-
-The end-to-end case is the one worth knowing about: a deliberately hindsight-driven fake model (grades the outcome when it can see it, guesses when it cannot) must produce a **large positive premium**. If the premium ever stops detecting that, the metric has stopped working.
-
-Nine guards are mutation-tested. One of them, the deep scrub, initially survived its mutation — every nested object in the fixture had a declared inner allowlist, so the scrub was never reached. The fixture now includes an object with **no** declared shape, which is the only case where the scrub is the thing standing between an outcome and the model.
+One of those mutations is worth knowing about: disabling the deep scrub initially PASSED,
+because every nested object in the fixture had a declared inner allowlist and the scrub was
+never reached. The fixture now carries an object with **no** declared shape — the only case
+where the scrub is what stands between an outcome and the model.

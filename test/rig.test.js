@@ -214,5 +214,40 @@ t('a model without weights or licence is refused; a missing control only warns',
     assert.strictEqual(called, 0, 'it must refuse BEFORE the first API call, not after the bill');
   });
 
+  await T('the bakeoff task adapter conforms, and its prompt is genuinely blinded', async () => {
+    const TASK = require('../bakeoff/tasks/trade-grading.js');
+    for (const k of ['NAME', 'SYSTEM', 'NORMALISE', 'buildMessages', 'parse'])
+      assert.ok(TASK[k] !== undefined, 'task interface is missing ' + k);
+
+    const fixture = { trade: TRADE, level: 'narrative', blind: CONFIG };
+    const msgs = TASK.buildMessages(fixture);
+    const sent = JSON.stringify(msgs);
+    for (const leak of ['exitPrice', 'realizedPnl', 'exit_reason', 'durationMinutes', '"profit"'])
+      assert.ok(!sent.includes(leak), 'the task adapter leaked ' + leak + ' into the prompt');
+
+    // The harness prints ONE SYSTEM per task; this task's varies, so systemFor must exist
+    // and must actually differ, or --dry would show a sentence true of a third of the run.
+    assert.notStrictEqual(TASK.systemFor('narrative'), TASK.systemFor('full'),
+      'a single system prompt across levels is the defect this rig exists to avoid');
+    assert.strictEqual(TASK.systemFor('narrative'), TASK.SYSTEM, 'SYSTEM must be the narrative default');
+
+    // Refusal discipline matches the harness's: refused is a status, not a bad score.
+    assert.strictEqual(TASK.parse('{"grade":"B+"}').status, 'refused');
+    assert.strictEqual(TASK.parse('nonsense').status, 'refused');
+    const ok = TASK.parse('{"grade":"C","confidence":0.4}');
+    assert.strictEqual(ok.status, 'ok');
+    assert.strictEqual(ok.text, 'C');
+    assert.strictEqual(ok.fields.thesisQuality, null, 'an absent sub-score is not a 3');
+
+    // And it refuses a fixture with no blind config, rather than prompting unblinded.
+    // With NO blind config the allowlist check fires first — either refusal is correct, and
+    // the property is that it refuses rather than prompting a model with a raw trade.
+    assert.throws(() => TASK.buildMessages({ trade: TRADE, level: 'full' }), /visibleKeys|outcomeKeys/);
+    // With a visible list but no outcome list it must still refuse, which is the case that
+    // would otherwise produce a confident, fully unblinded run.
+    assert.throws(() => TASK.buildMessages({ trade: TRADE, level: 'full', blind: { visibleKeys: ['ticker'] } }),
+      /outcomeKeys/);
+  });
+
   console.log(`\n${n} assertions passed — the blind is the experiment\n`);
 })().catch(e => { console.error('\nFAILED:', e && e.message); process.exit(1); });

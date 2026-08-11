@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Textbook Search</title>
+<style>
+:root{
+  --navy:#0f2340;
+  --teal:#1a6b72;
+  --gold:#c8972a;
+  --cream:#f8f5ef;
+  --soft:#e8e2d8;
+  --text:#1c2b3a;
+  --muted:#6b7a8d;
+  --white:#ffffff;
+  --highlight:#fff3c4;
+  --border:#ddd7ce;
+  --headerText:#c5d3e0;
+  --cardHead:#fbf8f3;
+  --cardHeadBorder:#ece5db;
+  --fileBadgeBg:#f1ece3;
+  --fileBadgeText:#705b37;
+  --inputBg:#ffffff;
+  --inputBorder:#c9d0d6;
+}
+body.dark{
+  --navy:#0b1220;
+  --teal:#2e8f97;
+  --gold:#d2a23a;
+  --cream:#111827;
+  --soft:#1f2937;
+  --text:#e5e7eb;
+  --muted:#9ca3af;
+  --white:#111827;
+  --highlight:#5b4a14;
+  --border:#374151;
+  --headerText:#cbd5e1;
+  --cardHead:#18212f;
+  --cardHeadBorder:#2d3a4d;
+  --fileBadgeBg:#2a3342;
+  --fileBadgeText:#e5d3a1;
+  --inputBg:#111827;
+  --inputBorder:#475569;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;background:var(--cream);color:var(--text);min-height:100vh}
+header{background:var(--navy);color:#fff;padding:18px 20px}
+header h1{font-size:1.35rem;margin-bottom:4px}
+header p{color:var(--headerText);font-size:.92rem}
+.toolbar{background:var(--navy);padding:0 20px 18px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;align-items:center}
+input[type="text"],select,button,input[type="file"],input[type="number"]{
+  padding:11px 12px;font-size:16px;border-radius:8px;border:1px solid var(--inputBorder);
+  background:var(--inputBg);color:var(--text)
+}
+input[type="text"]{flex:1;min-width:240px}
+input[type="number"]{width:110px}
+button{background:var(--teal);color:#fff;border:none;cursor:pointer;font-weight:700}
+button.secondary{background:#6b7a8d}
+button.danger{background:#a23b30}
+button.mode-toggle{background:#374151}
+button:disabled{opacity:.6;cursor:not-allowed}
+.status{margin-top:12px;color:#d6e2ed;font-size:.92rem}
+.stats{background:var(--soft);color:var(--muted);padding:10px 20px;border-bottom:1px solid var(--border);font-size:.92rem}
+.main{max-width:1000px;margin:0 auto;padding:20px}
+.welcome{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:22px;line-height:1.6}
+.result-card{background:var(--white);border:1px solid var(--border);border-radius:12px;margin-bottom:14px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.card-header{background:var(--cardHead);border-bottom:1px solid var(--cardHeadBorder);padding:10px 14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.badge{display:inline-block;padding:4px 8px;border-radius:7px;font-size:.8rem;font-weight:700}
+.chapter-badge{background:var(--navy);color:#fff}
+.page-badge{background:#e8f4f8;color:var(--teal)}
+body.dark .page-badge{background:#17303a;color:#89d4da}
+.file-badge{background:var(--fileBadgeBg);color:var(--fileBadgeText)}
+.card-body{padding:14px;line-height:1.65;white-space:pre-wrap}
+mark{background:var(--highlight);color:inherit;padding:0 2px;border-radius:2px}
+.small{font-size:.88rem;color:var(--muted)}
+label{color:#d6e2ed;font-size:.92rem}
+.error-box{margin-top:10px;background:#fff3f2;color:#8a1c12;border:1px solid #f3c4bf;padding:10px 12px;border-radius:8px}
+body.dark .error-box{background:#3b1d1a;color:#fecaca;border-color:#7f1d1d}
+</style>
+</head>
+<body>
+<header>
+  <h1>AI Textbook Search</h1>
+  <p>Imports multiple saved iPhone photos in batches, extracts chapter/page/text, and lets you search fast.</p>
+</header>
+
+<div class="toolbar">
+  <div class="row">
+    <input type="text" id="searchInput" placeholder="Search words, phrases, definitions..." />
+    <select id="mode">
+      <option value="any">Any Word</option>
+      <option value="all">All Words</option>
+      <option value="exact">Exact Phrase</option>
+    </select>
+    <button id="searchBtn">Search</button>
+    <button id="themeBtn" class="mode-toggle">Dark Mode</button>
+  </div>
+
+  <div class="row">
+    <input type="file" id="imageUpload" accept="image/*" multiple />
+    <label for="batchSize">Batch size</label>
+    <input type="number" id="batchSize" min="1" max="4" value="2" />
+    <button id="scanBtn">Import Photos with AI</button>
+    <button id="clearBtn" class="secondary">Clear Search</button>
+    <button id="resetBtn" class="danger">Delete All Imported Pages</button>
+  </div>
+
+  <div class="status" id="status">Ready. On iPhone, choose Photo Library and select multiple saved photos.</div>
+  <div id="errorBox"></div>
+</div>
+
+<div class="stats" id="statsBar">0 imported pages</div>
+<div class="main" id="results"></div>
+
+<script>
+let textbookData = JSON.parse(localStorage.getItem("textbookData") || "[]");
+let themeMode = localStorage.getItem("themeMode") || "light";
+
+const searchInput = document.getElementById("searchInput");
+const modeSelect = document.getElementById("mode");
+const resultsEl = document.getElementById("results");
+const statsBar = document.getElementById("statsBar");
+const statusEl = document.getElementById("status");
+const imageUpload = document.getElementById("imageUpload");
+const scanBtn = document.getElementById("scanBtn");
+const batchSizeInput = document.getElementById("batchSize");
+const themeBtn = document.getElementById("themeBtn");
+const errorBox = document.getElementById("errorBox");
+
+function showError(message) {
+  errorBox.innerHTML = message ? `<div class="error-box">${message}</div>` : "";
+}
+
+function applyTheme() {
+  document.body.classList.toggle("dark", themeMode === "dark");
+  themeBtn.textContent = themeMode === "dark" ? "Light Mode" : "Dark Mode";
+  localStorage.setItem("themeMode", themeMode);
+}
+
+function toggleTheme() {
+  themeMode = themeMode === "dark" ? "light" : "dark";
+  applyTheme();
+}
+
+function sortPages() {
+  textbookData.sort((a, b) => {
+    const chA = Number.isFinite(a.chapter) ? a.chapter : 9999;
+    const chB = Number.isFinite(b.chapter) ? b.chapter : 9999;
+    if (chA !== chB) return chA - chB;
+    const pA = Number.isFinite(a.page) ? a.page : 9999;
+    const pB = Number.isFinite(b.page) ? b.page : 9999;
+    if (pA !== pB) return pA - pB;
+    return (a.fileName || "").localeCompare(b.fileName || "");
+  });
+}
+
+function saveData() {
+  sortPages();
+  localStorage.setItem("textbookData", JSON.stringify(textbookData));
+  updateStats();
+}
+
+function updateStats(extra = "") {
+  const count = textbookData.length;
+  statsBar.textContent = `${count} imported page${count === 1 ? "" : "s"}${extra ? " · " + extra : ""}`;
+}
+
+function escapeRegExp(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getSnippet(text, query, mode) {
+  if (!query.trim()) return text;
+  const lower = text.toLowerCase();
+  let index = -1;
+
+  if (mode === "exact") {
+    index = lower.indexOf(query.toLowerCase());
+  } else {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    for (const word of words) {
+      index = lower.indexOf(word);
+      if (index !== -1) break;
+    }
+  }
+
+  if (index === -1) return text.length > 500 ? text.slice(0, 500) + "..." : text;
+
+  const start = Math.max(0, index - 140);
+  const end = Math.min(text.length, index + 260);
+  let snippet = text.slice(start, end);
+  if (start > 0) snippet = "..." + snippet;
+  if (end < text.length) snippet += "...";
+  return snippet;
+}
+
+function highlight(text, query, mode) {
+  if (!query.trim()) return text;
+  const terms = mode === "exact" ? [query.trim()] : query.trim().split(/\s+/).filter(Boolean);
+  const safeTerms = [...new Set(terms)].filter(Boolean).sort((a, b) => b.length - a.length).map(escapeRegExp);
+  if (!safeTerms.length) return text;
+  const regex = new RegExp(`(${safeTerms.join("|")})`, "gi");
+  return text.replace(regex, "<mark>$1</mark>");
+}
+
+function matches(text, query, mode) {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  const lower = text.toLowerCase();
+  if (mode === "exact") return lower.includes(q);
+  const words = q.split(/\s+/).filter(Boolean);
+  if (mode === "all") return words.every(word => lower.includes(word));
+  return words.some(word => lower.includes(word));
+}
+
+function renderWelcome() {
+  resultsEl.innerHTML = `
+    <div class="welcome">
+      <h2 style="margin-bottom:10px;">Fixed iPhone uploader</h2>
+      <p><strong>1.</strong> Pick saved photos from Photo Library.</p>
+      <p><strong>2.</strong> Keep batch size at <strong>2</strong>.</p>
+      <p><strong>3.</strong> Photos are compressed before upload so large iPhone images do not crash the request.</p>
+    </div>`;
+}
+
+function searchData() {
+  const query = searchInput.value.trim();
+  const mode = modeSelect.value;
+
+  if (!query) {
+    renderWelcome();
+    updateStats();
+    return;
+  }
+
+  const matchesFound = textbookData.filter(page => matches(page.content || "", query, mode));
+  updateStats(`${matchesFound.length} search result${matchesFound.length === 1 ? "" : "s"}`);
+
+  if (!matchesFound.length) {
+    resultsEl.innerHTML = `<div class="welcome"><h2 style="margin-bottom:10px;">No results found</h2><p>Try a different word, a shorter phrase, or switch the search mode.</p></div>`;
+    return;
+  }
+
+  resultsEl.innerHTML = matchesFound.map(page => {
+    const snippet = getSnippet(page.content || "", query, mode);
+    return `
+      <div class="result-card">
+        <div class="card-header">
+          <span class="badge chapter-badge">Ch ${page.chapter ?? "?"}</span>
+          <span class="badge page-badge">p. ${page.page ?? "?"}</span>
+          <span class="badge file-badge">${page.fileName || "Imported image"}</span>
+          ${page.title ? `<span class="small">${page.title}</span>` : ""}
+        </div>
+        <div class="card-body">${highlight(snippet, query, mode)}</div>
+      </div>`;
+  }).join("");
+}
+
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
+  return chunks;
+}
+
+async function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+
+    reader.onload = e => {
+      img.src = e.target.result;
+    };
+
+    reader.onerror = reject;
+
+    img.onload = () => {
+      const maxWidth = 1200;
+      const scale = img.width > maxWidth ? maxWidth / img.width : 1;
+
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+      resolve(canvas.toDataURL("image/jpeg", 0.72));
+    };
+
+    img.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildDedupKey(page) {
+  const chapter = page.chapter ?? "";
+  const pageNum = page.page ?? "";
+  const title = (page.title || "").trim().toLowerCase();
+  const textStart = (page.text || page.content || "").trim().toLowerCase().slice(0, 160);
+  return `${chapter}|${pageNum}|${title}|${textStart}`;
+}
+
+function hasDuplicate(page) {
+  const newKey = buildDedupKey(page);
+  return textbookData.some(existing => buildDedupKey(existing) === newKey);
+}
+
+async function sendBatch(batch) {
+  const response = await fetch("/.netlify/functions/extract-pages-batch", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ images: batch })
+  });
+
+  const data = await response.json();
+
+  if (!response.ok || !Array.isArray(data.pages)) {
+    const detail = data?.error || data?.details || JSON.stringify(data);
+    throw new Error(detail || "Batch extraction failed");
+  }
+
+  return data.pages;
+}
+
+async function retryIndividually(batch) {
+  const recoveredPages = [];
+  let failed = 0;
+
+  for (let i = 0; i < batch.length; i++) {
+    statusEl.textContent = `Retrying ${i + 1} of ${batch.length} one-by-one...`;
+    try {
+      const pages = await sendBatch([batch[i]]);
+      if (pages.length) recoveredPages.push(...pages);
+      else failed++;
+    } catch (err) {
+      console.error("Single retry failed", batch[i].filename, err);
+      failed++;
+    }
+  }
+
+  return { recoveredPages, failed };
+}
+
+async function processImages() {
+  const files = Array.from(imageUpload.files || []);
+  if (!files.length) {
+    alert("Choose one or more photos first.");
+    return;
+  }
+
+  showError("");
+
+  let batchSize = parseInt(batchSizeInput.value, 10);
+  if (!Number.isFinite(batchSize) || batchSize < 1) batchSize = 2;
+  if (batchSize > 4) batchSize = 4;
+  batchSizeInput.value = batchSize;
+
+  scanBtn.disabled = true;
+  let added = 0;
+  let failed = 0;
+  let skippedDuplicates = 0;
+
+  try {
+    const filePayloads = [];
+
+    for (let i = 0; i < files.length; i++) {
+      statusEl.textContent = `Compressing ${i + 1} of ${files.length}: ${files[i].name}`;
+      const imageDataUrl = await compressImage(files[i]);
+      filePayloads.push({
+        filename: files[i].name,
+        imageDataUrl
+      });
+    }
+
+    const batches = chunkArray(filePayloads, batchSize);
+
+    for (let b = 0; b < batches.length; b++) {
+      const batch = batches[b];
+      statusEl.textContent = `Sending batch ${b + 1} of ${batches.length}...`;
+
+      let pages = [];
+      try {
+        pages = await sendBatch(batch);
+      } catch (batchErr) {
+        console.error("Batch failed, retrying individually", batchErr);
+        const retryResult = await retryIndividually(batch);
+        pages = retryResult.recoveredPages;
+        failed += retryResult.failed;
+      }
+
+      for (const page of pages) {
+        const normalized = {
+          id: crypto.randomUUID(),
+          chapter: page.chapter ?? null,
+          page: page.page ?? null,
+          title: page.title || null,
+          content: page.text || "",
+          text: page.text || "",
+          fileName: page.filename || "Imported image",
+          createdAt: new Date().toISOString()
+        };
+
+        if (!normalized.content.trim()) {
+          failed++;
+          continue;
+        }
+
+        if (hasDuplicate(normalized)) {
+          skippedDuplicates++;
+          continue;
+        }
+
+        textbookData.push(normalized);
+        added++;
+      }
+
+      saveData();
+    }
+  } catch (err) {
+    console.error(err);
+    failed++;
+    showError(`Import failed: ${err.message}`);
+  } finally {
+    imageUpload.value = "";
+    scanBtn.disabled = false;
+
+    const parts = [`Done. Added ${added} page${added === 1 ? "" : "s"}.`];
+    if (skippedDuplicates) parts.push(`${skippedDuplicates} duplicate${skippedDuplicates === 1 ? "" : "s"} skipped.`);
+    if (failed) parts.push(`${failed} failed.`);
+    statusEl.textContent = parts.join(" ");
+
+    searchData();
+  }
+}
+
+function clearSearch() {
+  searchInput.value = "";
+  renderWelcome();
+  updateStats();
+  statusEl.textContent = "Search cleared.";
+  showError("");
+}
+
+function resetAll() {
+  const confirmed = confirm("Delete all imported textbook pages from this device?");
+  if (!confirmed) return;
+  textbookData = [];
+  saveData();
+  renderWelcome();
+  statusEl.textContent = "All imported pages deleted.";
+  showError("");
+}
+
+document.getElementById("searchBtn").addEventListener("click", searchData);
+document.getElementById("scanBtn").addEventListener("click", processImages);
+document.getElementById("clearBtn").addEventListener("click", clearSearch);
+document.getElementById("resetBtn").addEventListener("click", resetAll);
+document.getElementById("themeBtn").addEventListener("click", toggleTheme);
+searchInput.addEventListener("input", searchData);
+modeSelect.addEventListener("change", searchData);
+
+applyTheme();
+sortPages();
+renderWelcome();
+updateStats();
+</script>
+</body>
+</html>
